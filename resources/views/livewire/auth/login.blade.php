@@ -1,0 +1,8 @@
+<div>
+<div class="mb-7 flex items-center justify-center gap-3"><span class="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-primary text-white"><x-icon name="leaf" class="h-6 w-6"/></span><span class="text-xl font-semibold tracking-tight">Lumbung Beras</span></div>
+<section class="panel p-7 sm:p-9"><p class="eyebrow">Ruang kerja owner</p><h1 class="page-title">Selamat datang kembali.</h1><p class="mb-7 mt-3 text-sm leading-6 text-brand-textGray">Masuk untuk mengelola produksi, penjualan, dan keuangan lumbung Anda.</p><x-feedback/>
+<form wire:submit="login" class="space-y-5"><label class="field" for="email">Email<input id="email" wire:model="email" type="email" class="input" required autofocus autocomplete="username" placeholder="Email owner"></label>
+<div class="field" x-data="{ show: false }"><label for="password">Password</label><div class="relative"><input id="password" wire:model="password" :type="show ? 'text' : 'password'" type="password" class="input pr-24" required autocomplete="current-password"><button type="button" @click="show = !show" :aria-pressed="show" class="absolute inset-y-0 right-3 text-[11px] text-brand-primary" x-text="show ? 'Sembunyikan' : 'Tampilkan'">Tampilkan</button></div></div>
+<label class="flex items-center gap-2 text-xs text-brand-textGray"><input wire:model="remember" type="checkbox">Ingat saya di perangkat ini</label>
+<button class="btn btn-primary w-full" type="submit" wire:loading.attr="disabled"><span wire:loading.remove>Masuk ke ruang kerja</span><span wire:loading>Memeriksa akun…</span><x-icon name="arrow"/></button></form></section><p class="mt-6 text-center text-[11px] text-brand-textGray">Satu tempat untuk setiap aktivitas lumbung.</p>
+</div>
