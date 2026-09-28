@@ -5,14 +5,16 @@
     "scripts": {
         "build": "vite build",
         "dev": "vite",
-    "postinstall": "npm run build"
+        "postinstall": "npm run build",
+        "preinstall": "rimraf node_modules/.cache"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.3.3",
         "concurrently": "^10.0.3",
         "laravel-vite-plugin": "^3.1",
         "tailwindcss": "^4.3.3",
-        "vite": "^8.0.0"
+        "vite": "^8.0.0",
+        "rimraf": "^5.0.0"
     },
     "optionalDependencies": {
         "@laravel/multiplex": "^0.4.1"
