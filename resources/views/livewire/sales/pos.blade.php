@@ -1,7 +1,11 @@
-<div>
+<div x-data="{ cartOpen: false }">
 <div class="page-heading"><div><p class="eyebrow">Point of sale</p><h1 class="page-title">Transaksi baru</h1><p class="page-description">Pilih produk, masukkan berat, lalu konfirmasi pembayaran.</p></div><a href="{{ route('sales.index') }}" class="btn"><x-icon name="clock"/>Riwayat penjualan</a></div>
 <x-feedback/>
-<a href="#pos-cart" class="btn mb-4 xl:hidden"><x-icon name="cart"/>Keranjang ({{ count($cart) }})</a>
+<div x-show="cartOpen" x-cloak @click="cartOpen = false" class="fixed inset-0 z-30 bg-[#183247]/25 backdrop-blur-[2px] xl:hidden"></div>
+<button type="button" @click="cartOpen = !cartOpen" :aria-expanded="cartOpen" aria-controls="pos-cart" class="fixed inset-x-4 bottom-4 z-50 flex min-h-12 items-center justify-between rounded-xl bg-brand-primary px-4 text-sm font-semibold text-white shadow-elegant xl:hidden">
+    <span class="flex items-center gap-2"><x-icon name="sales"/>Keranjang ({{ count($cart) }})</span>
+    <svg class="h-5 w-5 transition-transform" :class="cartOpen ? 'rotate-180' : ''" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+</button>
 <div class="grid items-start gap-6 xl:grid-cols-[1fr_390px]">
 <section class="panel overflow-hidden"><div class="filters"><label class="field min-w-40 flex-1">Cari produk<input wire:model.live.debounce.300ms="search" class="input" placeholder="Nama atau kode produk..."></label><label class="field">Kategori<select wire:model.live="category" class="input"><option value="">Semua kategori</option>@foreach(['Beras','Dedek','Pupuk','Lainnya','Bahan Baku'] as $type)<option>{{ $type }}</option>@endforeach</select></label></div>
 <div class="grid grid-cols-2 gap-3 p-4 2xl:grid-cols-3">
@@ -9,8 +13,8 @@
 <div class="mb-4 flex w-full items-center justify-between"><span class="flex h-9 w-9 items-center justify-center rounded-lg bg-[#d5f3e8] text-[#708399]"><x-icon name="box"/></span><span class="text-[10px] text-brand-textGray">{{ $product->type }}</span></div><span class="text-sm font-semibold">{{ $product->name }}</span><span class="mt-1 text-[10px] text-brand-textGray">{{ $product->code }} · {{ number_format($product->stock_kg, 3, ',', '.') }} kg tersedia</span><span class="mt-4 flex w-full items-center justify-between text-sm font-semibold">Rp {{ number_format($product->selling_price, 0, ',', '.') }}<x-icon name="plus" class="text-brand-primary"/></span></button>
 @empty<div class="empty-state col-span-full">Produk aktif dengan stok tersedia belum ditemukan.<br><a href="{{ route('products.form') }}" class="font-semibold text-brand-primary">Tambah produk →</a></div>@endforelse
 </div><div class="px-5 pb-5">{{ $products->links() }}</div></section>
-<section id="pos-cart" class="panel scroll-mt-24 overflow-hidden">
-<div class="flex items-center justify-between border-b border-[#e5ebf1] p-5"><h2 class="text-sm font-semibold">Keranjang transaksi</h2><span class="badge">{{ count($cart) }} produk</span></div>
+<section id="pos-cart" class="panel scroll-mt-24 overflow-hidden transition-transform duration-200 ease-out xl:static xl:max-h-none xl:overflow-visible" :class="cartOpen ? 'fixed inset-x-0 bottom-0 z-40 max-h-[calc(100dvh-4rem)] translate-y-0 rounded-b-none overflow-y-auto' : 'fixed inset-x-0 bottom-0 z-40 translate-y-full pointer-events-none xl:static xl:translate-y-0 xl:pointer-events-auto'">
+<div class="sticky top-0 z-20 flex items-center justify-between border-b border-[#e5ebf1] bg-white p-5"><h2 class="text-sm font-semibold">Keranjang transaksi</h2><span class="badge">{{ count($cart) }} produk</span></div>
 <div class="max-h-[360px] space-y-4 overflow-y-auto p-5">
 @forelse($cart as $id => $item)<div wire:key="cart-{{ $id }}" class="border-b border-[#e5ebf1] pb-4"><div class="flex justify-between gap-2"><span class="text-sm font-medium">{{ $item['name'] }}</span><button wire:click="removeItem({{ $id }})" aria-label="Hapus {{ $item['name'] }}" class="text-brand-textGray hover:text-red-600"><x-icon name="close"/></button></div><p class="mt-1 text-[11px] text-brand-textGray">Rp {{ number_format($item['price'], 0, ',', '.') }} / kg</p><div class="mt-3 flex items-center justify-between"><label class="flex items-center gap-2 text-xs text-brand-textGray"><input aria-label="Berat {{ $item['name'] }}" wire:model.blur="cart.{{ $id }}.qty" wire:change="calculateCart" inputmode="decimal" class="input max-w-24">kg</label><span class="text-sm font-semibold">Rp {{ number_format($item['subtotal'] ?? 0, 2, ',', '.') }}</span></div></div>
 @empty<div class="empty-state"><x-icon name="sales" class="mb-3 h-8 w-8 text-[#708399]"/><p>Keranjang masih kosong.</p><p class="text-xs">Pilih produk untuk memulai.</p></div>@endforelse
