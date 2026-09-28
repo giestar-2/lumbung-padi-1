@@ -2,17 +2,17 @@
 
 namespace Tests\Feature;
 
-use App\Models\Sale;
+use App\Livewire\Dashboard;
 use App\Models\CashEntry;
+use App\Models\Sale;
 use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseMigrations;
 use Livewire\Livewire;
 use Tests\TestCase;
-use App\Livewire\Dashboard;
 
 class DashboardTest extends TestCase
 {
-    use RefreshDatabase;
+    use DatabaseMigrations;
 
     protected function setUp(): void
     {
@@ -22,7 +22,10 @@ class DashboardTest extends TestCase
 
     public function test_dashboard_renders()
     {
-        $this->get('/')->assertStatus(200);
+        config()->set('cache.default', 'database');
+
+        $this->get('/')->assertOk()->assertSee('Dashboard usaha');
+        $this->get('/')->assertOk()->assertSee('Dashboard usaha');
     }
 
     public function test_dashboard_calculates_6_indicators_correctly()
