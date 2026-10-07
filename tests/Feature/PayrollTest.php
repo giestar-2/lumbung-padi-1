@@ -95,7 +95,8 @@ class PayrollTest extends TestCase
             ->call('addToCart', $budi->id)->call('addToCart', $andi->id)->call('addToCart', $budi->id)
             ->set('cart.'.$budi->id.'.days', 2);
 
-        $form->assertSee('Di keranjang')->assertViewHas('cartTotal', '240000.00');
+        $form->assertDontSee('Di keranjang')->assertDontSee('Tambahkan ke keranjang')
+            ->assertSee('is-selected')->assertViewHas('cartTotal', '240000.00');
         $form->call('checkout')->assertHasNoErrors()->assertSet('cart', []);
         $form->call('checkout')->assertHasErrors(['cart']);
 
