@@ -9,6 +9,7 @@ use App\Models\Payroll;
 use App\Models\ProductionBatch;
 use App\Models\User;
 use App\SummaryCache;
+use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -55,6 +56,9 @@ class Index extends Component
 
     public $employeeSearch = '';
 
+    /** @var array<int, array{days: int|string}> */
+    public array $cart = [];
+
     #[Locked]
     public string $idempotencyKey;
 
@@ -65,7 +69,7 @@ class Index extends Component
 
     public function mount(): void
     {
-        $this->period_start = now('Asia/Jakarta')->startOfWeek()->toDateString();
+        $this->period_start = Decimal::today();
         $this->period_end = Decimal::today();
         $this->payroll_date = Decimal::today();
         $this->idempotencyKey = (string) Str::uuid();
@@ -89,9 +93,12 @@ class Index extends Component
 
     public function edit(int $id): void
     {
+        $this->clearCart();
         $payroll = Payroll::findOrFail($id);
         $this->payrollId = $id;
         $this->fill($payroll->only('employee_id', 'period_start', 'period_end', 'payroll_date', 'total_amount', 'notes', 'salary_type', 'daily_rate', 'work_days', 'classification', 'production_batch_id'));
+        $this->daily_rate = Decimal::input($this->daily_rate);
+        $this->total_amount = Decimal::input($this->total_amount);
         $this->resetValidation();
     }
 
@@ -99,10 +106,109 @@ class Index extends Component
     {
         $this->reset('payrollId', 'employee_id', 'total_amount', 'notes', 'classification', 'production_batch_id', 'confirmSimilar');
         $this->idempotencyKey = (string) Str::uuid();
+        $this->period_start = $this->period_end = $this->payroll_date = Decimal::today();
+        $this->resetValidation();
+    }
+
+    public function addToCart(int $id): void
+    {
+        $employee = Employee::where('is_active', true)->where('salary_type', 'Harian')->findOrFail($id);
+        if (bccomp((string) $employee->default_rate, '0', 2) <= 0) {
+            throw ValidationException::withMessages(['cart' => 'Isi gaji per hari karyawan terlebih dahulu.']);
+        }
+        if (! isset($this->cart[$id])) {
+            $this->cart[$id] = ['days' => 1];
+        }
+        $this->confirmSimilar = false;
+    }
+
+    public function removeItem(int $id): void
+    {
+        unset($this->cart[$id]);
+        $this->confirmSimilar = false;
+        $this->resetValidation();
+    }
+
+    public function clearCart(): void
+    {
+        $this->reset('cart', 'confirmSimilar', 'notes');
+        $this->idempotencyKey = (string) Str::uuid();
+        $this->resetValidation();
+    }
+
+    public function checkout(): void
+    {
+        abort_if($this->payrollId !== null, 403);
+        $data = $this->validate([
+            'cart' => 'required|array|min:1|max:100', 'cart.*.days' => 'required|integer|min:1|max:366',
+            'period_start' => 'required|date_format:Y-m-d', 'period_end' => 'required|date_format:Y-m-d|after_or_equal:period_start',
+            'payroll_date' => 'required|date_format:Y-m-d', 'classification' => 'required|in:Operasional,Produksi',
+            'production_batch_id' => 'nullable|exists:production_batches,id', 'notes' => 'nullable|string|max:2000',
+            'confirmSimilar' => 'boolean',
+        ]);
+        $daysInPeriod = (int) Carbon::parse($data['period_start'])->diffInDays(Carbon::parse($data['period_end'])) + 1;
+        foreach ($this->cart as $id => $item) {
+            if (! ctype_digit((string) $id) || (int) $id <= 0 || (int) $item['days'] > $daysInPeriod) {
+                throw ValidationException::withMessages(['cart' => 'Periksa karyawan dan jumlah hari kerja. Hari kerja tidak boleh melebihi periode yang dipilih.']);
+            }
+        }
+        if ($data['classification'] === 'Produksi' && ! $data['production_batch_id']) {
+            throw ValidationException::withMessages(['production_batch_id' => 'Pilih produksi tujuan untuk biaya gaji.']);
+        }
+        $batchId = $data['classification'] === 'Produksi' ? $data['production_batch_id'] : null;
+        DB::transaction(function () use ($data, $batchId): void {
+            User::whereKey(auth()->id())->lockForUpdate()->firstOrFail();
+            $previous = Payroll::where('idempotency_key', 'like', $this->idempotencyKey.':%')->get();
+            if ($previous->isNotEmpty()) {
+                if ($previous->count() !== count($this->cart)) {
+                    throw ValidationException::withMessages(['cart' => 'Keranjang ini sudah dipakai untuk pembayaran lain.']);
+                }
+                foreach ($previous as $payroll) {
+                    if (! isset($this->cart[$payroll->employee_id]) || (int) $payroll->work_days !== (int) $this->cart[$payroll->employee_id]['days'] || $payroll->period_start !== $data['period_start'] || $payroll->period_end !== $data['period_end'] || $payroll->payroll_date !== $data['payroll_date'] || $payroll->classification !== $data['classification'] || (string) $payroll->production_batch_id !== (string) $batchId || (string) $payroll->notes !== (string) $data['notes']) {
+                        throw ValidationException::withMessages(['cart' => 'Keranjang ini sudah dipakai untuk pembayaran lain.']);
+                    }
+                }
+
+                return;
+            }
+            $employees = Employee::whereIn('id', array_keys($this->cart))->orderBy('id')->lockForUpdate()->get();
+            if ($employees->count() !== count($this->cart)) {
+                throw ValidationException::withMessages(['cart' => 'Karyawan tidak ditemukan. Periksa kembali keranjang.']);
+            }
+            if ($batchId) {
+                $batch = ProductionBatch::lockForUpdate()->findOrFail($batchId);
+                if ($batch->cost_finalized_at || $batch->outputs()->where('is_stocked', true)->exists() || $batch->children()->exists()) {
+                    throw ValidationException::withMessages(['production_batch_id' => 'Biaya produksi sudah dikunci. Pilih produksi lain.']);
+                }
+            }
+            foreach ($employees as $employee) {
+                if (! $employee->is_active || $employee->salary_type !== 'Harian' || bccomp((string) $employee->default_rate, '0', 2) <= 0) {
+                    throw ValidationException::withMessages(['cart' => 'Periksa status dan gaji per hari '.$employee->name.'.']);
+                }
+                if (! $this->confirmSimilar && $employee->payrolls()->where('period_start', '<=', $data['period_end'])->where('period_end', '>=', $data['period_start'])->exists()) {
+                    throw ValidationException::withMessages(['confirmSimilar' => $employee->name.' sudah memiliki pembayaran pada periode ini. Periksa riwayat sebelum melanjutkan.']);
+                }
+                $days = (int) $this->cart[$employee->id]['days'];
+                $payroll = Payroll::create([
+                    'employee_id' => $employee->id, 'salary_type' => 'Harian', 'daily_rate' => $employee->default_rate,
+                    'work_days' => $days, 'total_amount' => bcmul((string) $employee->default_rate, (string) $days, 2),
+                    'period_start' => $data['period_start'], 'period_end' => $data['period_end'], 'payroll_date' => $data['payroll_date'],
+                    'payment_status' => 'Sudah Dibayar', 'classification' => $data['classification'], 'production_batch_id' => $batchId,
+                    'notes' => $data['notes'], 'idempotency_key' => $this->idempotencyKey.':'.$employee->id,
+                ]);
+                $this->syncCash($payroll, $employee->name);
+            }
+        }, 3);
+        $count = count($this->cart);
+        $this->clearCart();
+        session()->flash('message', 'Gaji '.$count.' karyawan dibayar dan tercatat di Pengeluaran.');
     }
 
     public function save(): void
     {
+        if (! $this->payrollId) {
+            throw ValidationException::withMessages(['cart' => 'Pilih karyawan melalui kartu lalu gunakan tombol Bayar gaji.']);
+        }
         $this->total_amount = Decimal::normalize($this->total_amount, 2, 'total_amount');
         $this->daily_rate = Decimal::normalize($this->daily_rate, 2, 'daily_rate');
         $data = $this->validate(['employee_id' => 'required|exists:employees,id', 'period_start' => 'required|date_format:Y-m-d',
@@ -118,28 +224,10 @@ class Index extends Component
         if ($data['classification'] === 'Operasional') {
             $data['production_batch_id'] = null;
         }
-        if (! $this->payrollId && ! $this->confirmSimilar && Payroll::where('employee_id', $this->employee_id)->where('salary_type', $this->salary_type)
-            ->where('period_start', '<=', $this->period_end)->where('period_end', '>=', $this->period_start)->exists()) {
-            $this->addError('confirmSimilar', 'Ada pembayaran dengan periode serupa. Periksa lalu centang konfirmasi jika memang pembayaran berbeda.');
-
-            return;
-        }
         DB::transaction(function () use ($data): void {
             User::whereKey(auth()->id())->lockForUpdate()->firstOrFail();
             $employee = Employee::lockForUpdate()->findOrFail($data['employee_id']);
-            if (! $employee->is_active && ! $this->payrollId) {
-                throw ValidationException::withMessages(['employee_id' => 'Karyawan nonaktif tidak dapat menerima pembayaran baru.']);
-            }
-            $payroll = $this->payrollId ? Payroll::lockForUpdate()->findOrFail($this->payrollId) : Payroll::where('idempotency_key', $this->idempotencyKey)->first();
-            if ($payroll && ! $this->payrollId) {
-                foreach (['employee_id', 'period_start', 'period_end', 'total_amount', 'salary_type'] as $field) {
-                    if ((string) $payroll->$field !== (string) $data[$field] && ! ($field === 'total_amount' && bccomp((string) $payroll->$field, $data[$field], 2) === 0)) {
-                        throw ValidationException::withMessages(['total_amount' => 'Formulir ini sudah dipakai untuk pembayaran lain.']);
-                    }
-                }
-
-                return;
-            }
+            $payroll = Payroll::lockForUpdate()->findOrFail($this->payrollId);
             foreach (array_unique(array_filter([$payroll?->production_batch_id, $data['production_batch_id']])) as $id) {
                 $batch = ProductionBatch::lockForUpdate()->findOrFail($id);
                 if ($batch->cost_finalized_at || $batch->outputs()->where('is_stocked', true)->exists() || $batch->children()->exists()) {
@@ -147,7 +235,7 @@ class Index extends Component
                 }
             }
             $data['payment_status'] = 'Sudah Dibayar';
-            $payroll = $payroll ? tap($payroll)->update($data) : Payroll::create($data + ['idempotency_key' => $this->idempotencyKey]);
+            $payroll->update($data);
             $this->syncCash($payroll, $employee->name);
         }, 3);
         $this->resetForm();
@@ -207,6 +295,12 @@ class Index extends Component
         if (in_array($property, ['from', 'to', 'employeeFilter', 'salaryFilter'])) {
             $this->resetPage();
         }
+        if ($property === 'employeeSearch') {
+            $this->resetPage('employeesPage');
+        }
+        if (str_starts_with($property, 'cart.') || in_array($property, ['period_start', 'period_end'])) {
+            $this->confirmSimilar = false;
+        }
     }
 
     public function render(): View
@@ -231,6 +325,23 @@ class Index extends Component
         }
         $batches = ProductionBatch::whereNull('cost_finalized_at')->orderByDesc('id')->limit(50)->get();
 
-        return view('livewire.payrolls.index', compact('payrolls', 'employees', 'batches', 'totalGajiDibayar', 'totalGajiHarian', 'totalGajiBulanan', 'jumlahKaryawanDibayar'));
+        $availableEmployees = Employee::where('is_active', true)->where('salary_type', 'Harian')->where('default_rate', '>', 0)
+            ->where(fn ($q) => $q->where('name', 'like', '%'.$this->employeeSearch.'%')->orWhere('role', 'like', '%'.$this->employeeSearch.'%'))
+            ->orderBy('name')->paginate(12, ['*'], 'employeesPage');
+        $cartEmployees = Employee::whereIn('id', array_keys($this->cart))->get()->keyBy('id');
+        $cartTotal = '0.00';
+        $cartLines = [];
+        foreach ($this->cart as $id => $item) {
+            $employee = $cartEmployees->get($id);
+            if (! $employee) {
+                continue;
+            }
+            $days = filter_var($item['days'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 366]]);
+            $amount = $days !== false ? bcmul((string) $employee->default_rate, (string) $days, 2) : '0.00';
+            $cartTotal = bcadd($cartTotal, $amount, 2);
+            $cartLines[$id] = ['name' => $employee->name, 'rate' => $employee->default_rate, 'amount' => $amount];
+        }
+
+        return view('livewire.payrolls.index', compact('payrolls', 'employees', 'availableEmployees', 'cartLines', 'cartTotal', 'batches', 'totalGajiDibayar', 'totalGajiHarian', 'totalGajiBulanan', 'jumlahKaryawanDibayar'));
     }
 }

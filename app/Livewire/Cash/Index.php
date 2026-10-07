@@ -6,6 +6,7 @@ use App\Decimal;
 use App\Models\CashEntry;
 use App\Models\Payment;
 use App\Models\Payroll;
+use App\Models\Product;
 use App\Models\ProductionBatch;
 use App\SummaryCache;
 use Illuminate\Support\Facades\DB;
@@ -73,6 +74,7 @@ class Index extends Component
         abort_if($entry->reference_type, 403);
         $this->entryId = $id;
         $this->fill($entry->only('entry_date', 'type', 'name', 'category', 'amount', 'description', 'classification', 'production_batch_id'));
+        $this->amount = Decimal::input($this->amount);
     }
 
     public function resetForm(): void
@@ -147,6 +149,7 @@ class Index extends Component
             ->when($this->source === 'pos', fn ($q) => $q->where('category', 'Penjualan Langsung')->whereNotNull('reference_type'))
             ->when($this->source === 'receivable', fn ($q) => $q->where('category', 'Penerimaan Piutang')->whereNotNull('reference_type'))
             ->when($this->source === 'payroll', fn ($q) => $q->where('reference_type', Payroll::class))
+            ->when($this->source === 'product', fn ($q) => $q->where('reference_type', Product::class))
             ->when($this->source === 'production', fn ($q) => $q->where('reference_type', 'batch_cost'));
         [$totalPemasukan, $totalPengeluaran, $penjualanLangsung, $penerimaanPiutang, $pemasukanLainnya, $pembelianBahan, $biayaPengolahan, $gajiOperasional, $saldo] = SummaryCache::remember('cash', $this->only('search', 'from', 'to', 'categoryFilter', 'source'), function () use ($query): array {
             $incoming = (clone $query)->where('type', 'Pemasukan');
@@ -156,7 +159,7 @@ class Index extends Component
             $penjualanLangsung = (clone $incoming)->where('category', 'Penjualan Langsung')->sum('amount');
             $penerimaanPiutang = (clone $incoming)->where('category', 'Penerimaan Piutang')->sum('amount');
             $pemasukanLainnya = bcsub(bcsub((string) $totalPemasukan, (string) $penjualanLangsung, 2), (string) $penerimaanPiutang, 2);
-            $pembelianBahan = (clone $outgoing)->where('category', 'Pembelian Bahan')->sum('amount');
+            $pembelianBahan = (clone $outgoing)->whereIn('category', ['Pembelian Bahan', 'Pembelian Produk'])->sum('amount');
             $biayaPengolahan = (clone $outgoing)->where('category', 'Biaya Pengolahan')->sum('amount');
             $gajiOperasional = bcsub(bcsub((string) $totalPengeluaran, (string) $pembelianBahan, 2), (string) $biayaPengolahan, 2);
             $saldo = bcsub((string) $totalPemasukan, (string) $totalPengeluaran, 2);

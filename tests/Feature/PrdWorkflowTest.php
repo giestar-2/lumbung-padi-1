@@ -185,9 +185,9 @@ class PrdWorkflowTest extends TestCase
     {
         $this->owner();
         $product = Product::factory()->create();
-        $component = Livewire::test(Index::class)->call('adjust', $product->id)->set('actualStock', '20,500');
+        $component = Livewire::test(Index::class)->call('adjust', $product->id)->set('incomingStock', '20,500');
         $product->update(['stock_kg' => 99]);
-        $component->call('saveAdjustment')->assertHasErrors('actualStock');
+        $component->call('saveAdjustment')->assertHasErrors('incomingStock');
         $this->assertDatabaseHas('products', ['id' => $product->id, 'stock_kg' => 99]);
     }
 
@@ -271,8 +271,8 @@ class PrdWorkflowTest extends TestCase
     public function test_payroll_saves_payment_and_updates_same_cash_entry_on_edit(): void
     {
         $this->owner();
-        $employee = Employee::factory()->create(['name' => 'Budi', 'is_active' => true]);
-        $component = Livewire::test(\App\Livewire\Payrolls\Index::class)->set('employee_id', $employee->id)->set('total_amount', '200000')->call('save')->assertHasNoErrors();
+        $employee = Employee::factory()->create(['name' => 'Budi', 'is_active' => true, 'default_rate' => 200000]);
+        $component = Livewire::test(\App\Livewire\Payrolls\Index::class)->call('addToCart', $employee->id)->call('checkout')->assertHasNoErrors();
         $payroll = Payroll::firstOrFail();
         $this->assertSame('Sudah Dibayar', $payroll->payment_status);
         $component->call('edit', $payroll->id)->set('total_amount', '250000')->call('save')->assertHasNoErrors();
@@ -419,10 +419,60 @@ class PrdWorkflowTest extends TestCase
         Livewire::test(Pos::class)
             ->call('addToCart', $product->id)
             ->call('setPaymentAmount', '10000')
-            ->assertSet('paid_amount', '10000.00')
+            ->assertSet('paid_amount', '10000')
             ->assertSet('payment_status', 'Belum Lunas')
             ->call('setPaymentAmount', '15000')
             ->assertSet('payment_status', 'Lunas');
+    }
+
+    public function test_product_selection_uses_card_border_without_cart_text(): void
+    {
+        $this->owner();
+        $product = Product::factory()->create(['name' => 'Beras premium']);
+
+        Livewire::test(Pos::class)
+            ->assertDontSee('Di keranjang')
+            ->call('addToCart', $product->id)
+            ->assertSee('is-selected')
+            ->assertDontSee('Di keranjang')
+            ->assertDontSee('Tambah ke keranjang')
+            ->assertSet('cart.'.$product->id.'.qty', '1')
+            ->call('addToCart', $product->id)
+            ->assertSet('cart.'.$product->id.'.qty', '2')
+            ->call('removeItem', $product->id)
+            ->assertDontSee('Di keranjang');
+
+        $this->assertDatabaseHas('products', ['id' => $product->id, 'stock_kg' => 100]);
+    }
+
+    public function test_emptying_cart_resets_totals_payment_and_errors_without_changing_stock(): void
+    {
+        $this->owner();
+        $products = Product::factory()->count(2)->create();
+        $component = Livewire::test(Pos::class)
+            ->call('addToCart', $products[0]->id)
+            ->call('addToCart', $products[1]->id)
+            ->set('discount', '1000')
+            ->call('setPaymentAmount', '10000')
+            ->call('checkout')->assertHasErrors('customer_id');
+        $previousKey = $component->get('idempotencyKey');
+
+        $component->call('clearCart')
+            ->assertSet('cart', [])
+            ->assertSet('discount', 0)
+            ->assertSet('paid_amount', 0)
+            ->assertSet('payment_status', 'Lunas')
+            ->assertHasNoErrors()
+            ->assertDontSee('Di keranjang');
+
+        $this->assertSame('0.00', $component->instance()->getSubtotalProperty());
+        $this->assertSame('0.00', $component->instance()->getTotalProperty());
+        $this->assertNotSame($previousKey, $component->get('idempotencyKey'));
+        foreach ($products as $product) {
+            $this->assertDatabaseHas('products', ['id' => $product->id, 'stock_kg' => 100]);
+        }
+        $this->assertDatabaseCount('sales', 0);
+        $this->assertDatabaseCount('cash_entries', 0);
     }
 
     public function test_many_small_residue_allocations_preserve_the_exact_cost_pool(): void
@@ -469,7 +519,7 @@ class PrdWorkflowTest extends TestCase
         }
         $this->travelTo(now('Asia/Jakarta')->setDate(2026, 9, 27));
         $batch = ProductionBatch::factory()->create(['name' => 'Panen September', 'origin' => 'Pak Haryanto', 'raw_material_weight' => 1200, 'current_stage' => 'Pengeringan']);
-        $employee = Employee::factory()->create(['name' => 'Budi Santoso', 'role' => 'Operator produksi']);
+        $employee = Employee::factory()->create(['name' => 'Budi Santoso', 'role' => 'Operator produksi', 'default_rate' => 90000]);
         Payroll::factory()->create(['employee_id' => $employee->id, 'payroll_date' => Decimal::today(), 'period_start' => '2026-09-01', 'period_end' => '2026-09-27', 'total_amount' => 1800000, 'payment_status' => 'Sudah Dibayar', 'salary_type' => 'Bulanan']);
         Livewire::test(Dashboard::class)->assertViewHas('topProducts', fn ($products) => $products->first()->id === $rice->id);
         $pages = ['dashboard' => '/', 'products' => '/products', 'product-form' => '/products/form/'.$rice->id, 'sales' => '/sales?detail='.$sale->id, 'pos' => '/sales/pos',

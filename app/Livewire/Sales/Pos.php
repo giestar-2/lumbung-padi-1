@@ -55,9 +55,9 @@ class Pos extends Component
     {
         $product = Product::where('is_active', true)->findOrFail($productId);
         if (isset($this->cart[$productId])) {
-            $this->cart[$productId]['qty'] = bcadd((string) $this->cart[$productId]['qty'], '1', 3);
+            $this->cart[$productId]['qty'] = Decimal::input(bcadd((string) $this->cart[$productId]['qty'], '1', 3));
         } else {
-            $this->cart[$productId] = ['id' => $product->id, 'name' => $product->name, 'price' => $product->selling_price, 'qty' => '1.000', 'subtotal' => $product->selling_price];
+            $this->cart[$productId] = ['id' => $product->id, 'name' => $product->name, 'price' => $product->selling_price, 'qty' => '1', 'subtotal' => $product->selling_price];
         }
         $this->calculateCart();
     }
@@ -67,7 +67,7 @@ class Pos extends Component
         if ((string) $qty === '0') {
             unset($this->cart[$productId]);
         } elseif (isset($this->cart[$productId])) {
-            $this->cart[$productId]['qty'] = Decimal::normalize($qty, 3, 'cart');
+            $this->cart[$productId]['qty'] = Decimal::input(Decimal::normalize($qty, 3, 'cart'));
         }
         $this->calculateCart();
     }
@@ -75,6 +75,13 @@ class Pos extends Component
     public function removeItem(int $productId): void
     {
         unset($this->cart[$productId]);
+    }
+
+    public function clearCart(): void
+    {
+        $this->reset('cart', 'discount', 'paid_amount', 'payment_status');
+        $this->resetValidation();
+        $this->idempotencyKey = (string) Str::uuid();
     }
 
     public function calculateCart(): void
@@ -86,7 +93,7 @@ class Pos extends Component
 
                 continue;
             }
-            $qty = Decimal::normalize($item['qty'], 3, 'cart');
+            $qty = Decimal::input(Decimal::normalize($item['qty'], 3, 'cart'));
             $this->cart[$id] = ['id' => $id, 'name' => $products[$id]->name, 'price' => $products[$id]->selling_price, 'qty' => $qty,
                 'subtotal' => Decimal::money(bcmul($qty, (string) $products[$id]->selling_price, 8))];
         }
@@ -116,7 +123,7 @@ class Pos extends Component
 
     public function updatedPaymentStatus(): void
     {
-        $this->paid_amount = $this->payment_status === 'Lunas' ? $this->total : '0';
+        $this->paid_amount = $this->payment_status === 'Lunas' ? Decimal::input($this->total) : '0';
     }
 
     public function updatedPaidAmount(): void
@@ -135,18 +142,18 @@ class Pos extends Component
 
     public function setPaymentAmount(mixed $amount): void
     {
-        $this->paid_amount = Decimal::normalize($amount, 2, 'paid_amount');
+        $this->paid_amount = Decimal::input(Decimal::normalize($amount, 2, 'paid_amount'));
         $this->updatedPaidAmount();
     }
 
-    public function checkout(SalesLedger $ledger): mixed
+    public function checkout(SalesLedger $ledger): void
     {
         $this->resetValidation();
         $sale = $ledger->confirm($this->only(['cart', 'customer_id', 'discount', 'discount_type', 'paid_amount', 'due_date', 'notes']), $this->idempotencyKey);
+        $this->clearCart();
+        $this->reset('customer_id', 'notes', 'due_date', 'discount_type');
         session()->flash('message', 'Transaksi '.$sale->invoice_number.' tersimpan. Total Rp '.number_format((float) $sale->total, 0, ',', '.').'.');
-        session()->flash('sale_id', $sale->id);
-
-        return redirect()->route('sales.index');
+        $this->dispatch('pos-completed');
     }
 
     public function updatedSearch(): void

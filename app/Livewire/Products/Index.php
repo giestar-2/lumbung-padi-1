@@ -3,9 +3,11 @@
 namespace App\Livewire\Products;
 
 use App\Decimal;
+use App\Models\CashEntry;
 use App\Models\Product;
 use App\SummaryCache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 use Livewire\Attributes\Layout;
@@ -37,7 +39,21 @@ class Index extends Component
     #[Locked]
     public string $previousStock = '0';
 
-    public $actualStock = '0';
+    #[Locked]
+    public string $previousValue = '0';
+
+    #[Locked]
+    public string $previousCost = '0';
+
+    #[Locked]
+    public string $stockProductName = '';
+
+    #[Locked]
+    public string $purchaseKey = '';
+
+    public $incomingStock = '';
+
+    public $purchaseTotal = '';
 
     public int $perPage = 25;
 
@@ -60,30 +76,63 @@ class Index extends Component
     {
         $product = Product::findOrFail($id);
         $this->adjustId = $id;
-        $this->actualStock = $this->previousStock = (string) $product->stock_kg;
+        $this->previousStock = (string) $product->stock_kg;
+        $this->previousValue = (string) $product->inventory_value;
+        $this->previousCost = (string) $product->cogs_per_kg;
+        $this->stockProductName = $product->name;
+        $this->purchaseKey = (string) Str::uuid();
+        $this->reset('incomingStock', 'purchaseTotal');
+        $this->resetValidation();
+    }
+
+    public function cancelAdjustment(): void
+    {
+        $this->adjustId = null;
         $this->resetValidation();
     }
 
     public function saveAdjustment(): void
     {
-        $stock = Decimal::normalize($this->actualStock, 3, 'actualStock');
-        DB::transaction(function () use ($stock): void {
+        if (! $this->adjustId) {
+            return;
+        }
+        $stock = Decimal::normalize($this->incomingStock, 3, 'incomingStock');
+        if (bccomp($stock, '0', 3) <= 0) {
+            throw ValidationException::withMessages(['incomingStock' => 'Stok masuk harus lebih dari 0 kg.']);
+        }
+        $total = trim((string) $this->purchaseTotal) === '' ? Decimal::money(bcmul($stock, $this->previousCost, 8)) : Decimal::normalize($this->purchaseTotal, 2, 'purchaseTotal');
+        DB::transaction(function () use ($stock, $total): void {
             $product = Product::lockForUpdate()->findOrFail($this->adjustId);
-            if (bccomp((string) $product->stock_kg, $this->previousStock, 3) !== 0) {
-                throw ValidationException::withMessages(['actualStock' => 'Stok berubah sejak pratinjau dibuka. Buka ulang penyesuaian.']);
+            if (CashEntry::where('idempotency_key', $this->purchaseKey)->exists()) {
+                return;
             }
-            $product->update(['stock_kg' => $stock, 'inventory_value' => Decimal::money(bcmul($stock, (string) $product->cogs_per_kg, 8))]);
+            if (bccomp((string) $product->stock_kg, $this->previousStock, 3) !== 0 || bccomp((string) $product->inventory_value, $this->previousValue, 2) !== 0 || bccomp((string) $product->cogs_per_kg, $this->previousCost, 6) !== 0) {
+                throw ValidationException::withMessages(['incomingStock' => 'Stok atau modal berubah. Tutup lalu buka kembali form stok masuk.']);
+            }
+            $newStock = bcadd((string) $product->stock_kg, $stock, 3);
+            $newValue = bcadd((string) $product->inventory_value, $total, 2);
+            $product->update(['stock_kg' => $newStock, 'inventory_value' => $newValue, 'cogs_per_kg' => bcdiv($newValue, $newStock, 6)]);
+            if (bccomp($total, '0', 2) > 0) {
+                CashEntry::create([
+                    'entry_date' => Decimal::today(), 'type' => 'Pengeluaran',
+                    'name' => 'Pembelian '.$product->name, 'category' => 'Pembelian Produk',
+                    'classification' => 'Persediaan', 'amount' => $total,
+                    'description' => 'Pembelian stok masuk '.$stock.' kg.',
+                    'reference_type' => Product::class, 'reference_id' => $product->id,
+                    'idempotency_key' => $this->purchaseKey,
+                ]);
+            }
         });
         $this->adjustId = null;
-        session()->flash('message', 'Stok diperbarui ke jumlah aktual. Tidak ada perubahan kas.');
+        session()->flash('message', 'Stok masuk tersimpan dan modal rata-rata diperbarui. Pengeluaran dicatat sesuai total belanja.');
     }
 
     public function delete(int $id): void
     {
         DB::transaction(function () use ($id): void {
             $product = Product::lockForUpdate()->findOrFail($id);
-            if ($product->saleItems()->exists() || $product->outputs()->exists() || $product->batches()->exists()) {
-                throw ValidationException::withMessages(['delete' => 'Produk dipakai dalam penjualan atau produksi. Gunakan Nonaktifkan.']);
+            if ($product->saleItems()->exists() || $product->outputs()->exists() || $product->batches()->exists() || $product->cashEntries()->exists()) {
+                throw ValidationException::withMessages(['delete' => 'Produk memiliki riwayat penjualan, produksi, atau pengeluaran. Gunakan Nonaktifkan.']);
             }
             $product->delete();
         });
@@ -104,8 +153,23 @@ class Index extends Component
 
             return [$totalHargaProduk, $totalHargaModal, $jumlahProduk, $produkStokMenipis];
         }, 30);
-        $products = $query->withCount(['saleItems', 'outputs', 'batches'])->orderByDesc('id')->paginate(in_array($this->perPage, [10, 25, 50]) ? $this->perPage : 25);
+        $products = $query->withCount(['saleItems', 'outputs', 'batches', 'cashEntries'])->orderByDesc('id')->paginate(in_array($this->perPage, [10, 25, 50]) ? $this->perPage : 25);
 
-        return view('livewire.products.index', compact('products', 'totalHargaProduk', 'totalHargaModal', 'jumlahProduk', 'produkStokMenipis'));
+        $purchasePreview = null;
+        if ($this->adjustId) {
+            try {
+                $incoming = Decimal::normalize($this->incomingStock, 3, 'incomingStock');
+                if (bccomp($incoming, '0', 3) > 0) {
+                    $total = trim((string) $this->purchaseTotal) === '' ? Decimal::money(bcmul($incoming, $this->previousCost, 8)) : Decimal::normalize($this->purchaseTotal, 2, 'purchaseTotal');
+                    $stock = bcadd($this->previousStock, $incoming, 3);
+                    $average = bcdiv(bcadd($this->previousValue, $total, 2), $stock, 6);
+                    $purchasePreview = compact('total', 'stock', 'average');
+                }
+            } catch (ValidationException) {
+                $purchasePreview = null;
+            }
+        }
+
+        return view('livewire.products.index', compact('products', 'totalHargaProduk', 'totalHargaModal', 'jumlahProduk', 'produkStokMenipis', 'purchasePreview'));
     }
 }

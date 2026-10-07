@@ -15,7 +15,7 @@ class SummaryCacheTest extends TestCase
 {
     use DatabaseMigrations;
 
-    public function test_summary_is_reused_and_refreshes_after_stock_adjustment(): void
+    public function test_summary_is_reused_and_refreshes_after_stock_purchase(): void
     {
         $this->actingAs(User::factory()->create());
         $product = Product::factory()->create(['stock_kg' => '10', 'selling_price' => '15000']);
@@ -29,8 +29,8 @@ class SummaryCacheTest extends TestCase
         $this->assertSame(1, SummaryCache::remember('count', [], $read));
         $this->assertSame(1, $reads);
         Livewire::test(Index::class)->assertViewHas('totalHargaProduk', 150000)
-            ->call('adjust', $product->id)->set('actualStock', '5')->call('saveAdjustment')
-            ->assertHasNoErrors()->assertViewHas('totalHargaProduk', 75000);
+            ->call('adjust', $product->id)->set('incomingStock', '5')->call('saveAdjustment')
+            ->assertHasNoErrors()->assertViewHas('totalHargaProduk', 225000);
         SummaryCache::remember('count', [], $read);
         $this->assertSame(2, $reads);
     }

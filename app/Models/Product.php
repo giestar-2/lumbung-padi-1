@@ -34,4 +34,9 @@ class Product extends Model
     {
         return $this->hasMany(ProductionBatch::class, 'raw_material_id');
     }
+
+    public function cashEntries(): HasMany
+    {
+        return $this->hasMany(CashEntry::class, 'reference_id')->where('reference_type', self::class);
+    }
 }

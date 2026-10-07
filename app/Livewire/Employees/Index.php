@@ -52,13 +52,18 @@ class Index extends Component
         $employee = Employee::findOrFail($id);
         $this->employeeId = $id;
         $this->fill($employee->only('name', 'phone', 'role', 'salary_type', 'default_rate', 'notes', 'is_active'));
+        $this->default_rate = Decimal::input($this->default_rate);
+        if ($employee->salary_type !== 'Harian') {
+            $this->default_rate = '';
+        }
     }
 
     public function save(): void
     {
         $this->default_rate = Decimal::normalize($this->default_rate, 2, 'default_rate');
         $data = $this->validate(['name' => 'required|string|max:150', 'phone' => 'nullable|string|max:30', 'role' => 'nullable|string|max:150',
-            'salary_type' => 'required|in:Harian,Bulanan', 'default_rate' => 'required|numeric|min:0', 'notes' => 'nullable|string|max:2000', 'is_active' => 'boolean']);
+            'default_rate' => 'required|numeric|gt:0', 'notes' => 'nullable|string|max:2000', 'is_active' => 'boolean']);
+        $data['salary_type'] = 'Harian';
         Employee::updateOrCreate(['id' => $this->employeeId], $data);
         $this->resetForm();
         session()->flash('message', 'Data karyawan tersimpan.');

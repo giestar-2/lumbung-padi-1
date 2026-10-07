@@ -25,4 +25,18 @@ final class Decimal
     {
         return now('Asia/Jakarta')->toDateString();
     }
+
+    public static function display(mixed $value, int $scale = 2): string
+    {
+        $formatted = number_format((float) str_replace(',', '.', (string) $value), $scale, ',', '.');
+
+        return $scale > 0 ? rtrim(rtrim($formatted, '0'), ',') : $formatted;
+    }
+
+    public static function input(mixed $value): string
+    {
+        $value = (string) $value;
+
+        return str_contains($value, '.') ? rtrim(rtrim($value, '0'), '.') : $value;
+    }
 }
