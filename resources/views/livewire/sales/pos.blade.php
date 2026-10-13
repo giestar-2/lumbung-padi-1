@@ -31,9 +31,28 @@
     <div class="min-w-0"><h2 class="text-base font-semibold">Keranjang transaksi</h2><p class="mt-1 text-[11px] text-brand-textGray">{{ count($cart) }} produk dipilih</p></div>
     <button type="button" wire:click="clearCart" wire:loading.attr="disabled" wire:target="clearCart,checkout" @disabled(count($cart) === 0) class="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-red-100 bg-red-50 px-2.5 py-2 text-[11px] font-semibold text-red-700 transition-colors hover:bg-red-100"><x-icon name="trash" class="h-3.5 w-3.5"/>Kosongkan</button>
 </div>
-<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-16 xl:pb-0">
-<div class="space-y-4 overflow-y-auto p-5 xl:max-h-[360px]">
-@forelse($cart as $id => $item)<div wire:key="cart-{{ $id }}" class="border-b border-[#eaeef2] pb-4"><div class="flex justify-between gap-2"><span class="text-sm font-medium">{{ $item['name'] }}</span><button wire:click="removeItem({{ $id }})" aria-label="Hapus {{ $item['name'] }}" class="text-brand-textGray hover:text-red-600"><x-icon name="close"/></button></div><p class="mt-1 text-[11px] text-brand-textGray">Rp {{ number_format($item['price'], 0, ',', '.') }} / kg</p><div class="mt-3 flex items-center justify-between"><label class="flex items-center gap-2 text-xs text-brand-textGray"><input aria-label="Berat {{ $item['name'] }}" wire:model.blur="cart.{{ $id }}.qty" wire:change="calculateCart" inputmode="decimal" class="input max-w-24">kg</label><span class="text-sm font-semibold">Rp {{ \App\Decimal::display($item['subtotal'] ?? 0, 2) }}</span></div></div>
+<div class="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-16 touch-pan-y xl:pb-0">
+<div class="space-y-4 p-5 xl:max-h-[360px] xl:overflow-y-auto">
+@forelse($cart as $id => $item)
+    <div wire:key="cart-{{ $id }}" class="border-b-2 border-[#cbd5e1] pb-4 last:border-0">
+        <div class="flex justify-between gap-2"><span class="text-sm font-medium">{{ $item['name'] }}</span><button wire:click="removeItem({{ $id }})" aria-label="Hapus {{ $item['name'] }}" class="text-brand-textGray hover:text-red-600"><x-icon name="close"/></button></div>
+        <div class="mt-3 grid grid-cols-[minmax(0,1fr)_60px_minmax(120px,1.2fr)] items-end gap-2">
+            <label class="field min-w-0 gap-1 text-[10px]">Harga / kg<input aria-label="Harga jual {{ $item['name'] }} per kg" wire:model.blur="cart.{{ $id }}.price" wire:change="calculateCart" inputmode="decimal" class="input min-h-9 min-w-0 px-2 py-1 text-xs"></label>
+            <label class="field min-w-0 gap-1 text-[10px]">Berat<input aria-label="Berat {{ $item['name'] }}" wire:model.blur="cart.{{ $id }}.qty" wire:change="calculateCart" inputmode="decimal" class="input min-h-9 min-w-0 px-1 py-1 text-xs"></label>
+            <div class="min-w-0"><span class="mb-1 block text-[10px]">Total</span><span title="Rp {{ \App\Decimal::display($item['subtotal'] ?? 0, 2) }}" class="flex min-h-9 min-w-0 items-center justify-end overflow-hidden rounded-lg border border-[#cbd5e1] bg-[#f8fafc] px-2 text-right text-xs font-semibold tabular-nums"><span class="truncate whitespace-nowrap">Rp {{ \App\Decimal::display($item['subtotal'] ?? 0, 2) }}</span></span></div>
+        </div>
+        @if(bccomp((string) $item['available_stock'], '0', 3) <= 0)
+            <p class="mt-1 text-[10px] font-medium text-red-700">Stok produk habis.</p>
+        @elseif($item['qty_adjusted'])
+            <p class="mt-1 text-[10px] font-medium text-amber-700">Jumlah disesuaikan ke stok tersedia: {{ \App\Decimal::display($item['available_stock'], 3) }} kg.</p>
+        @endif
+        <div class="mt-1 flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-[10px] text-brand-textGray">
+            <span>Normal Rp {{ \App\Decimal::display($item['base_price'], 2) }} / kg</span>
+            @if(bccomp((string) $item['price'], (string) $item['base_price'], 2) < 0)
+                <span class="font-medium text-emerald-700">Hemat Rp {{ \App\Decimal::display($item['discount_total'], 2) }}</span>
+            @endif
+        </div>
+    </div>
 @empty<div class="empty-state"><x-icon name="sales" class="mb-3 h-8 w-8 text-[#747780]"/><p>Keranjang masih kosong.</p><p class="text-xs">Pilih produk untuk memulai.</p></div>@endforelse
 </div>
 <div class="space-y-4 border-t border-[#eaeef2] bg-[#f6fafe] p-5">

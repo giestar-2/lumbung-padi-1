@@ -25,16 +25,18 @@ final class SalesLedger
             'discount_type' => 'required|in:Tidak Ada,Persen,Rupiah', 'due_date' => 'nullable|date_format:Y-m-d',
             'notes' => 'nullable|string|max:2000',
         ])->validate();
-        $quantities = [];
+        $quantities = $prices = [];
         foreach ($data['cart'] as $id => $item) {
             $quantities[(int) $id] = Decimal::normalize($item['qty'] ?? '', 3, 'cart');
+            $prices[(int) $id] = array_key_exists('price', $item) ? Decimal::normalize($item['price'], 2, 'cart') : null;
         }
         ksort($quantities);
+        ksort($prices);
         $discountInput = Decimal::normalize($data['discount'], 2, 'discount');
         $paid = Decimal::normalize($data['paid_amount'], 2, 'paid_amount');
-        $hash = hash('sha256', json_encode([$quantities, $data['customer_id'], $discountInput, $data['discount_type'], $paid, $data['due_date'], $data['notes']]));
+        $hash = hash('sha256', json_encode([$quantities, $prices, $data['customer_id'], $discountInput, $data['discount_type'], $paid, $data['due_date'], $data['notes']]));
 
-        return DB::transaction(function () use ($data, $key, $quantities, $discountInput, $paid, $hash): Sale {
+        return DB::transaction(function () use ($data, $key, $quantities, $prices, $discountInput, $paid, $hash): Sale {
             User::whereKey(auth()->id())->lockForUpdate()->firstOrFail();
             if ($previous = Sale::where('idempotency_key', $key)->first()) {
                 if ($previous->request_hash !== $hash) {
@@ -51,13 +53,14 @@ final class SalesLedger
                 if (! $product || ! $product->is_active || bccomp($quantity, '0', 3) <= 0 || bccomp((string) $product->stock_kg, $quantity, 3) < 0) {
                     throw ValidationException::withMessages(['cart' => 'Produk tidak aktif atau stok tidak cukup. Periksa jumlah kg.']);
                 }
-                $amount = Decimal::money(bcmul($quantity, (string) $product->selling_price, 8));
+                $unitPrice = $prices[$id] ?? (string) $product->selling_price;
+                $amount = bccomp($unitPrice, '0', 2) > 0 ? Decimal::money(bcmul($quantity, $unitPrice, 8)) : '0.00';
                 $hpp = bccomp($quantity, (string) $product->stock_kg, 3) === 0 ? (string) $product->inventory_value : Decimal::money(bcmul($quantity, (string) $product->cogs_per_kg, 8));
                 if (bccomp($hpp, (string) $product->inventory_value, 2) > 0) {
                     $hpp = (string) $product->inventory_value;
                 }
                 $lines[$id] = ['product_id' => $id, 'product_name' => $product->name, 'product_category' => $product->type,
-                    'quantity' => $quantity, 'price' => $product->selling_price, 'cogs' => $product->cogs_per_kg,
+                    'quantity' => $quantity, 'price' => $unitPrice, 'cogs' => $product->cogs_per_kg,
                     'subtotal' => $amount, 'hpp' => $hpp];
                 $subtotal = bcadd($subtotal, $amount, 2);
             }

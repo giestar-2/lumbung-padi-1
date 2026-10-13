@@ -57,7 +57,8 @@ class Pos extends Component
         if (isset($this->cart[$productId])) {
             $this->cart[$productId]['qty'] = Decimal::input(bcadd((string) $this->cart[$productId]['qty'], '1', 3));
         } else {
-            $this->cart[$productId] = ['id' => $product->id, 'name' => $product->name, 'price' => $product->selling_price, 'qty' => '1', 'subtotal' => $product->selling_price];
+            $this->cart[$productId] = ['id' => $product->id, 'name' => $product->name, 'base_price' => $product->selling_price,
+                'price' => $product->selling_price, 'qty' => '1', 'subtotal' => $product->selling_price];
         }
         $this->calculateCart();
     }
@@ -87,15 +88,30 @@ class Pos extends Component
     public function calculateCart(): void
     {
         $products = Product::whereIn('id', array_keys($this->cart))->get()->keyBy('id');
+        $quantityAdjusted = false;
         foreach ($this->cart as $id => $item) {
             if (! isset($products[$id])) {
                 unset($this->cart[$id]);
 
                 continue;
             }
-            $qty = Decimal::input(Decimal::normalize($item['qty'], 3, 'cart'));
-            $this->cart[$id] = ['id' => $id, 'name' => $products[$id]->name, 'price' => $products[$id]->selling_price, 'qty' => $qty,
-                'subtotal' => Decimal::money(bcmul($qty, (string) $products[$id]->selling_price, 8))];
+            $requestedQty = Decimal::normalize($item['qty'], 3, 'cart');
+            $availableStock = Decimal::input(Decimal::normalize($products[$id]->stock_kg, 3, 'cart'));
+            $wasAdjusted = bccomp($requestedQty, $availableStock, 3) > 0;
+            $qty = Decimal::input($wasAdjusted ? $availableStock : $requestedQty);
+            $quantityAdjusted = $quantityAdjusted || $wasAdjusted;
+            $basePrice = (string) $products[$id]->selling_price;
+            $price = Decimal::input(Decimal::normalize($item['price'] ?? $basePrice, 2, 'cart'));
+            $unitDiscount = bccomp($price, $basePrice, 2) < 0 ? bcsub($basePrice, $price, 2) : '0.00';
+            $discountTotal = bccomp($unitDiscount, '0', 2) > 0 ? Decimal::money(bcmul($qty, $unitDiscount, 8)) : '0.00';
+            $this->cart[$id] = ['id' => $id, 'name' => $products[$id]->name, 'base_price' => $basePrice, 'price' => $price, 'qty' => $qty,
+                'available_stock' => $availableStock, 'qty_adjusted' => $wasAdjusted,
+                'subtotal' => bccomp($price, '0', 2) > 0 ? Decimal::money(bcmul($qty, $price, 8)) : '0.00',
+                'unit_discount' => $unitDiscount, 'discount_total' => $discountTotal];
+        }
+
+        if ($quantityAdjusted && $this->payment_status === 'Lunas') {
+            $this->paid_amount = Decimal::input($this->total);
         }
     }
 
@@ -149,6 +165,7 @@ class Pos extends Component
     public function checkout(SalesLedger $ledger): void
     {
         $this->resetValidation();
+        $this->calculateCart();
         $sale = $ledger->confirm($this->only(['cart', 'customer_id', 'discount', 'discount_type', 'paid_amount', 'due_date', 'notes']), $this->idempotencyKey);
         $this->clearCart();
         $this->reset('customer_id', 'notes', 'due_date', 'discount_type');
