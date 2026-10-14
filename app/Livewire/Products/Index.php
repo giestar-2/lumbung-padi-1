@@ -131,12 +131,9 @@ class Index extends Component
     {
         DB::transaction(function () use ($id): void {
             $product = Product::lockForUpdate()->findOrFail($id);
-            if ($product->saleItems()->exists() || $product->outputs()->exists() || $product->batches()->exists() || $product->cashEntries()->exists()) {
-                throw ValidationException::withMessages(['delete' => 'Produk memiliki riwayat penjualan, produksi, atau pengeluaran. Gunakan Nonaktifkan.']);
-            }
             $product->delete();
         });
-        session()->flash('message', 'Produk dihapus.');
+        session()->flash('message', 'Produk dihapus dari daftar aktif. Riwayat penjualan, produksi, dan pengeluaran tetap tersimpan.');
     }
 
     public function render(): View
@@ -153,7 +150,7 @@ class Index extends Component
 
             return [$totalHargaProduk, $totalHargaModal, $jumlahProduk, $produkStokMenipis];
         }, 30);
-        $products = $query->withCount(['saleItems', 'outputs', 'batches', 'cashEntries'])->orderByDesc('id')->paginate(in_array($this->perPage, [10, 25, 50]) ? $this->perPage : 25);
+        $products = $query->orderByDesc('id')->paginate(in_array($this->perPage, [10, 25, 50]) ? $this->perPage : 25);
 
         $purchasePreview = null;
         if ($this->adjustId) {

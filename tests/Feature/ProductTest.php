@@ -8,7 +8,9 @@ use App\Livewire\Products\Form;
 use App\Livewire\Products\Index;
 use App\Models\Product;
 use App\Models\User;
+use App\SalesLedger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -106,7 +108,7 @@ class ProductTest extends TestCase
         $this->assertDatabaseCount('cash_entries', 1);
     }
 
-    public function test_product_and_automatic_expense_history_cannot_be_deleted(): void
+    public function test_product_with_expense_history_can_be_soft_deleted_without_removing_history(): void
     {
         Livewire::test(Form::class)
             ->set('code', 'HISTORY')->set('name', 'Beras')
@@ -114,11 +116,13 @@ class ProductTest extends TestCase
         $product = Product::where('code', 'HISTORY')->firstOrFail();
         $entry = $product->cashEntries()->firstOrFail();
 
-        Livewire::test(Index::class)->call('delete', $product->id)->assertHasErrors(['delete']);
+        Livewire::test(Index::class)->call('delete', $product->id)->assertHasNoErrors();
         Livewire::test(CashIndex::class)->call('delete', $entry->id)->assertForbidden();
         Livewire::test(CashIndex::class)->call('edit', $entry->id)->assertForbidden();
 
-        $this->assertModelExists($product);
+        $this->assertDatabaseHas('products', ['id' => $product->id]);
+        $this->assertNotNull(Product::withTrashed()->findOrFail($product->id)->deleted_at);
+        $this->assertNull(Product::find($product->id));
         $this->assertModelExists($entry);
     }
 
@@ -242,13 +246,32 @@ class ProductTest extends TestCase
             ->assertViewHas('produkStokMenipis', 1);
     }
 
-    public function test_can_delete_product()
+    public function test_can_soft_delete_product()
     {
         $product = Product::factory()->create(['code' => 'DEL-01', 'name' => 'Del', 'type' => 'Beras', 'stock_kg' => 10, 'cogs_per_kg' => 1000, 'selling_price' => 2000]);
 
         Livewire::test(Index::class)
             ->call('delete', $product->id);
 
-        $this->assertDatabaseMissing('products', ['id' => $product->id]);
+        $this->assertDatabaseHas('products', ['id' => $product->id]);
+        $this->assertNotNull(Product::withTrashed()->findOrFail($product->id)->deleted_at);
+    }
+
+    public function test_product_with_sales_history_can_be_removed_from_active_list_without_losing_sale(): void
+    {
+        $product = Product::factory()->create(['name' => 'Beras Riwayat', 'stock_kg' => '10', 'cogs_per_kg' => '10000']);
+        $sale = (new SalesLedger)->confirm([
+            'cart' => [$product->id => ['qty' => '1.000']], 'customer_id' => null,
+            'discount' => '0', 'discount_type' => 'Rupiah', 'paid_amount' => '15000',
+            'due_date' => '', 'notes' => '',
+        ], (string) Str::uuid());
+
+        Livewire::test(Index::class)->call('delete', $product->id)->assertHasNoErrors();
+
+        $this->assertDatabaseHas('sales', ['id' => $sale->id]);
+        $this->assertDatabaseHas('sale_items', ['sale_id' => $sale->id, 'product_id' => $product->id, 'product_name' => 'Beras Riwayat']);
+        $this->assertNull(Product::find($product->id));
+        $this->assertNotNull(Product::withTrashed()->findOrFail($product->id)->deleted_at);
+        Livewire::test(Index::class)->assertDontSee('Beras Riwayat');
     }
 }

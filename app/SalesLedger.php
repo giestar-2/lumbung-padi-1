@@ -164,7 +164,7 @@ final class SalesLedger
         DB::transaction(function () use ($saleId): void {
             $sale = Sale::with(['items', 'payments'])->lockForUpdate()->findOrFail($saleId);
             $productIds = $sale->items->pluck('product_id')->unique()->sort()->values();
-            $products = Product::whereIn('id', $productIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $products = Product::withTrashed()->whereIn('id', $productIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
 
             foreach ($sale->items as $item) {
                 $product = $products->get($item->product_id);
