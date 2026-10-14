@@ -8,7 +8,9 @@ use App\Models\Customer;
 use App\Models\Product;
 use App\Models\Sale;
 use App\Models\User;
+use App\SalesLedger;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Livewire\Livewire;
 use Tests\TestCase;
 
@@ -44,6 +46,46 @@ class SalesTest extends TestCase
             ->assertViewHas('jumlahTransaksi', 1)
             ->assertViewHas('totalDibayar', 50000)
             ->assertViewHas('sisaPiutang', 50000);
+    }
+
+    public function test_sale_detail_opens_as_a_dialog(): void
+    {
+        $product = Product::factory()->create(['name' => 'Beras Premium']);
+        $sale = (new SalesLedger)->confirm([
+            'cart' => [$product->id => ['qty' => '1.000']], 'customer_id' => null,
+            'discount' => '0', 'discount_type' => 'Rupiah', 'paid_amount' => '15000',
+            'due_date' => '', 'notes' => '',
+        ], (string) Str::uuid());
+
+        Livewire::test(Index::class)->call('openDetail', $sale->id)
+            ->assertSet('detail', $sale->id)
+            ->assertSee('role="dialog"', false)
+            ->assertSee($sale->invoice_number)
+            ->assertSee('Beras Premium');
+    }
+
+    public function test_deleting_sale_restores_stock_and_removes_related_payment_records(): void
+    {
+        $customer = Customer::factory()->create(['name' => 'Pelanggan Uji']);
+        $product = Product::factory()->create(['stock_kg' => '100', 'cogs_per_kg' => '10000']);
+        $sale = (new SalesLedger)->confirm([
+            'cart' => [$product->id => ['qty' => '2.000']], 'customer_id' => $customer->id,
+            'discount' => '0', 'discount_type' => 'Rupiah', 'paid_amount' => '10000',
+            'due_date' => '', 'notes' => '',
+        ], (string) Str::uuid());
+        $this->assertDatabaseHas('products', ['id' => $product->id, 'stock_kg' => 98, 'inventory_value' => 980000]);
+        $this->assertDatabaseHas('customers', ['id' => $customer->id, 'receivable_balance' => 20000]);
+        $this->assertDatabaseCount('cash_entries', 1);
+
+        Livewire::test(Index::class)->call('openDetail', $sale->id)->call('delete', $sale->id)
+            ->assertHasNoErrors()->assertSet('detail', null);
+
+        $this->assertDatabaseMissing('sales', ['id' => $sale->id]);
+        $this->assertDatabaseMissing('sale_items', ['sale_id' => $sale->id]);
+        $this->assertDatabaseMissing('payments', ['sale_id' => $sale->id]);
+        $this->assertDatabaseCount('cash_entries', 0);
+        $this->assertDatabaseHas('products', ['id' => $product->id, 'stock_kg' => 100, 'inventory_value' => 1000000, 'cogs_per_kg' => 10000]);
+        $this->assertDatabaseHas('customers', ['id' => $customer->id, 'receivable_balance' => 0]);
     }
 
     public function test_can_checkout_pos()

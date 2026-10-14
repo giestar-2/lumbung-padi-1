@@ -157,6 +157,45 @@ final class SalesLedger
         }, 3);
     }
 
+    public function delete(int $saleId): void
+    {
+        Gate::authorize('owner');
+
+        DB::transaction(function () use ($saleId): void {
+            $sale = Sale::with(['items', 'payments'])->lockForUpdate()->findOrFail($saleId);
+            $productIds = $sale->items->pluck('product_id')->unique()->sort()->values();
+            $products = Product::whereIn('id', $productIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+
+            foreach ($sale->items as $item) {
+                $product = $products->get($item->product_id);
+                if (! $product) {
+                    continue;
+                }
+
+                $stock = bcadd((string) $product->stock_kg, (string) $item->quantity, 3);
+                $inventoryValue = bcadd((string) $product->inventory_value, (string) ($item->hpp ?? bcmul((string) $item->quantity, (string) $item->cogs, 2)), 2);
+                $product->update([
+                    'stock_kg' => $stock,
+                    'inventory_value' => $inventoryValue,
+                    'cogs_per_kg' => bccomp($stock, '0', 3) > 0 ? bcdiv($inventoryValue, $stock, 6) : '0.000000',
+                ]);
+            }
+
+            $paymentIds = $sale->payments->modelKeys();
+            CashEntry::where('reference_type', Payment::class)->whereIn('reference_id', $paymentIds)->delete();
+
+            $customerId = $sale->customer_id;
+            $sale->delete();
+
+            if ($customerId) {
+                $customer = Customer::lockForUpdate()->find($customerId);
+                if ($customer) {
+                    $customer->update(['receivable_balance' => Sale::where('customer_id', $customerId)->sum(DB::raw('total - paid_amount'))]);
+                }
+            }
+        }, 3);
+    }
+
     private function createPayment(Sale $sale, string $amount, string $date, string $key, bool $initial, string $notes, ?string $hash = null): void
     {
         $payment = Payment::create(['sale_id' => $sale->id, 'payment_date' => $date, 'amount' => $amount, 'is_initial' => $initial,

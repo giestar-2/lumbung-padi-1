@@ -90,6 +90,17 @@ class Index extends Component
         $this->resetValidation();
     }
 
+    public function delete(int $id, SalesLedger $ledger): void
+    {
+        $ledger->delete($id);
+
+        if ($this->detail === $id) {
+            $this->detail = null;
+        }
+
+        session()->flash('message', 'Transaksi dihapus. Stok sudah dikembalikan dan catatan pembayarannya ikut dihapus.');
+    }
+
     public function recordPayment(SalesLedger $ledger): void
     {
         $this->resetValidation();
