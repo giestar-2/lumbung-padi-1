@@ -47,7 +47,7 @@ class Settings extends Component
 
     public function updatePassword(): mixed
     {
-        $this->validate(['current_password' => 'required|current_password', 'new_password' => 'required|string|min:12|confirmed']);
+        $this->validate(['current_password' => 'required|current_password', 'new_password' => 'required|string|min:8|confirmed']);
         $user = Auth::user();
         DB::transaction(function () use ($user): void {
             $user->forceFill(['password' => Hash::make($this->new_password), 'remember_token' => Str::random(60)])->save();

@@ -19,8 +19,8 @@ class SetupOwner extends Command
 
             return self::FAILURE;
         }
-        $data = ['name' => $this->ask('Nama owner'), 'email' => $this->ask('Email'), 'password' => $this->secret('Password (minimal 12 karakter)')];
-        $validator = Validator::make($data, ['name' => 'required|string|max:150', 'email' => 'required|email|max:255', 'password' => 'required|string|min:12']);
+        $data = ['name' => $this->ask('Nama owner'), 'email' => $this->ask('Email'), 'password' => $this->secret('Password (minimal 8 karakter)')];
+        $validator = Validator::make($data, ['name' => 'required|string|max:150', 'email' => 'required|email|max:255', 'password' => 'required|string|min:8']);
         if ($validator->fails()) {
             foreach ($validator->errors()->all() as $error) {
                 $this->error($error);
