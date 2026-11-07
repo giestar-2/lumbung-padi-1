@@ -227,6 +227,82 @@ class PrdWorkflowTest extends TestCase
         $this->assertDatabaseCount('production_outputs', 1);
     }
 
+    public function test_dried_batches_with_the_same_raw_material_can_be_merged_and_source_is_locked(): void
+    {
+        $this->owner();
+        $rawMaterial = Product::factory()->create(['type' => 'Bahan Baku']);
+        $target = ProductionBatch::factory()->create([
+            'raw_material_id' => $rawMaterial->id,
+            'raw_material_weight' => '100.000',
+            'raw_material_cogs' => '100000.00',
+            'current_stage' => 'Pemisahan',
+            'dry_weight' => '80.000',
+        ]);
+        $source = ProductionBatch::factory()->create([
+            'raw_material_id' => $rawMaterial->id,
+            'raw_material_weight' => '50.000',
+            'raw_material_cogs' => '50000.00',
+            'current_stage' => 'Pemisahan',
+            'dry_weight' => '40.000',
+        ]);
+        BatchCost::factory()->create(['production_batch_id' => $source->id, 'amount' => '12000.00']);
+
+        Livewire::test(BatchShow::class, ['id' => $target->id])
+            ->assertSee('Gabungkan gabah kering')
+            ->assertSee($source->batch_number)
+            ->set('mergeSourceId', (string) $source->id)
+            ->call('mergeDryBatch')
+            ->assertHasNoErrors()
+            ->assertSee('Gabah kering yang digabung')
+            ->assertSee($source->batch_number);
+
+        $this->assertDatabaseHas('production_batches', [
+            'id' => $target->id,
+            'raw_material_weight' => 150,
+            'dry_weight' => 120,
+            'raw_material_cogs' => 162000,
+            'inherited_cost' => 62000,
+        ]);
+        $this->assertDatabaseHas('production_batch_merges', [
+            'target_batch_id' => $target->id,
+            'source_batch_id' => $source->id,
+            'weight_kg' => 40,
+            'transferred_cost' => 62000,
+        ]);
+        $this->assertDatabaseHas('batch_stages', [
+            'production_batch_id' => $target->id,
+            'stage_name' => 'Gabung Gabah Kering',
+            'weight_after' => 120,
+        ]);
+        $this->assertDatabaseCount('cash_entries', 0);
+
+        $this->expectException(ValidationException::class);
+        (new ProductionWorkflow)->advance($source->id, 'Pemisahan', [
+            'date' => Decimal::today(), 'weight' => '30', 'notes' => null, 'dedek' => '0', 'pupuk' => '0', 'mixtures' => [],
+        ]);
+    }
+
+    public function test_dried_batches_with_different_raw_materials_cannot_be_merged(): void
+    {
+        $this->owner();
+        $targetMaterial = Product::factory()->create(['type' => 'Bahan Baku']);
+        $otherMaterial = Product::factory()->create(['type' => 'Bahan Baku']);
+        $target = ProductionBatch::factory()->create([
+            'raw_material_id' => $targetMaterial->id, 'current_stage' => 'Pemisahan', 'dry_weight' => '80.000',
+        ]);
+        $source = ProductionBatch::factory()->create([
+            'raw_material_id' => $otherMaterial->id, 'current_stage' => 'Pemisahan', 'dry_weight' => '40.000',
+        ]);
+
+        Livewire::test(BatchShow::class, ['id' => $target->id])
+            ->set('mergeSourceId', (string) $source->id)
+            ->call('mergeDryBatch')
+            ->assertHasErrors('mergeSourceId');
+
+        $this->assertDatabaseCount('production_batch_merges', 0);
+        $this->assertDatabaseHas('production_batches', ['id' => $target->id, 'dry_weight' => 80]);
+    }
+
     public function test_cost_allocation_and_residue_inheritance_do_not_duplicate_cash(): void
     {
         $this->owner();

@@ -26,7 +26,7 @@ class ProductTest extends TestCase
 
     public function test_products_page_is_rendered()
     {
-        $this->get('/products')->assertStatus(200);
+        $this->get('/products')->assertStatus(200)->assertSee('Dedek dari sisa gabah');
     }
 
     public function test_can_create_new_product()
@@ -36,7 +36,7 @@ class ProductTest extends TestCase
             ->set('name', 'Beras Premium')
             ->set('type', 'Beras')
             ->set('stock_kg', 100)
-            ->set('total_cost', 1000000)
+            ->set('cogs_per_kg', 10000)
             ->set('selling_price', 12000)
             ->call('save')
             ->assertRedirect(route('products.index'));
@@ -44,6 +44,9 @@ class ProductTest extends TestCase
         $this->assertDatabaseHas('products', [
             'code' => 'PRD-001',
             'name' => 'Beras Premium',
+            'stock_kg' => 100,
+            'cogs_per_kg' => 10000,
+            'inventory_value' => 1000000,
         ]);
         $product = Product::where('code', 'PRD-001')->firstOrFail();
         $this->assertDatabaseHas('cash_entries', [
@@ -67,10 +70,10 @@ class ProductTest extends TestCase
 
     public function test_zero_stock_or_zero_total_does_not_create_an_expense(): void
     {
-        foreach (['EMPTY' => ['0', '0'], 'FREE' => ['100', '0']] as $code => [$stock, $cost]) {
+        foreach (['EMPTY' => ['0', '0'], 'FREE' => ['100', '0']] as $code => [$stock, $costPerKg]) {
             Livewire::test(Form::class)
                 ->set('code', $code)->set('name', $code)
-                ->set('stock_kg', $stock)->set('total_cost', $cost)
+                ->set('stock_kg', $stock)->set('cogs_per_kg', $costPerKg)
                 ->call('save')->assertHasNoErrors()->assertRedirect(route('products.index'));
         }
 
@@ -82,7 +85,7 @@ class ProductTest extends TestCase
     {
         $form = Livewire::test(Form::class)
             ->set('code', 'DECIMAL')->set('name', 'Beras pecahan')
-            ->set('stock_kg', '1,125')->set('total_cost', '1388,89');
+            ->set('stock_kg', '1,125')->set('cogs_per_kg', '1234,568889');
 
         $form->call('save')->assertHasNoErrors();
         $this->assertDatabaseHas('cash_entries', ['amount' => 1388.89]);
@@ -96,11 +99,15 @@ class ProductTest extends TestCase
     {
         Livewire::test(Form::class)
             ->set('code', 'EDIT')->set('name', 'Beras')
-            ->set('stock_kg', '10')->set('total_cost', '100000')->call('save');
+            ->set('stock_kg', '10')->set('cogs_per_kg', '10000')->call('save');
         $product = Product::where('code', 'EDIT')->firstOrFail();
 
         Livewire::test(Form::class, ['id' => $product->id])
-            ->set('name', 'Beras baru')->set('total_cost', '120000')->set('stock_kg', '99')
+            ->assertSee('Total modal persediaan')
+            ->assertSee('100.000');
+
+        Livewire::test(Form::class, ['id' => $product->id])
+            ->set('name', 'Beras baru')->set('stock_kg', '99')
             ->call('save')->assertHasNoErrors();
 
         $this->assertDatabaseHas('products', ['id' => $product->id, 'inventory_value' => 100000, 'cogs_per_kg' => 10000, 'stock_kg' => 10]);
@@ -112,7 +119,7 @@ class ProductTest extends TestCase
     {
         Livewire::test(Form::class)
             ->set('code', 'HISTORY')->set('name', 'Beras')
-            ->set('stock_kg', '10')->set('total_cost', '100000')->call('save');
+            ->set('stock_kg', '10')->set('cogs_per_kg', '10000')->call('save');
         $product = Product::where('code', 'HISTORY')->firstOrFail();
         $entry = $product->cashEntries()->firstOrFail();
 
@@ -129,22 +136,22 @@ class ProductTest extends TestCase
     public function test_invalid_product_does_not_create_stock_or_expense(): void
     {
         Livewire::test(Form::class)
-            ->set('name', 'Beras')->set('stock_kg', '-1')->set('total_cost', '100000')
+            ->set('name', 'Beras')->set('stock_kg', '-1')->set('cogs_per_kg', '10000')
             ->call('save')->assertHasErrors(['stock_kg']);
 
         $this->assertDatabaseCount('products', 0);
         $this->assertDatabaseCount('cash_entries', 0);
     }
 
-    public function test_total_purchase_requires_stock_and_preview_handles_incomplete_input(): void
+    public function test_initial_inventory_value_is_calculated_from_stock_and_cost_per_kg(): void
     {
-        $form = Livewire::test(Form::class)->set('total_cost', '100000');
-        $form->call('save')->assertHasErrors(['stock_kg']);
-        $this->assertDatabaseCount('products', 0);
-        $this->assertDatabaseCount('cash_entries', 0);
-
-        $form->set('stock_kg', 'abc')->assertViewHas('initialCostPerKg', null);
-        $form->set('stock_kg', '20')->assertViewHas('initialCostPerKg', '5000.000000');
+        $form = Livewire::test(Form::class)->set('stock_kg', '20')->set('cogs_per_kg', '5000');
+        $form->assertViewHas('initialInventoryValue', '100000.00');
+        $form->set('stock_kg', 'abc')->assertViewHas('initialInventoryValue', null);
+        $form->set('stock_kg', '20')->set('cogs_per_kg', '5000')
+            ->set('code', 'COST')->set('name', 'Modal uji')->call('save')->assertHasNoErrors();
+        $this->assertDatabaseHas('products', ['code' => 'COST', 'inventory_value' => 100000, 'cogs_per_kg' => 5000]);
+        $this->assertDatabaseHas('cash_entries', ['reference_type' => Product::class, 'amount' => 100000]);
     }
 
     public function test_stock_purchase_uses_weighted_average_for_cheaper_and_more_expensive_stock(): void

@@ -82,6 +82,9 @@ final class ProductionWorkflow
         Gate::authorize('owner');
         DB::transaction(function () use ($id, $expectedStage, $data): void {
             $batch = ProductionBatch::lockForUpdate()->findOrFail($id);
+            if (DB::table('production_batch_merges')->where('source_batch_id', $id)->exists()) {
+                throw ValidationException::withMessages(['stage_weight_after' => 'Batch ini sudah digabung ke batch lain dan tidak dapat diproses lagi.']);
+            }
             if ($batch->current_stage !== $expectedStage) {
                 return;
             }
@@ -155,6 +158,71 @@ final class ProductionWorkflow
         }, 3);
     }
 
+    public function mergeDryBatch(int $targetId, int $sourceId): void
+    {
+        Gate::authorize('owner');
+
+        if ($targetId === $sourceId) {
+            throw ValidationException::withMessages(['mergeSourceId' => 'Pilih batch lain untuk digabungkan.']);
+        }
+
+        DB::transaction(function () use ($targetId, $sourceId): void {
+            $batches = ProductionBatch::whereIn('id', [$targetId, $sourceId])->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+            $target = $batches->get($targetId);
+            $source = $batches->get($sourceId);
+
+            if (! $target || ! $source) {
+                abort(404);
+            }
+
+            $mergeTable = DB::table('production_batch_merges');
+            $targetAlreadyMerged = (clone $mergeTable)->where('source_batch_id', $targetId)->exists();
+            $sourceAlreadyUsed = (clone $mergeTable)->where('source_batch_id', $sourceId)->orWhere('target_batch_id', $sourceId)->exists();
+            $sameRawMaterial = $target->raw_material_id && $target->raw_material_id === $source->raw_material_id;
+
+            if ($target->type !== 'Beras' || $target->status !== 'Proses' || $target->current_stage !== 'Pemisahan' || $targetAlreadyMerged) {
+                throw ValidationException::withMessages(['mergeSourceId' => 'Batch tujuan harus berada pada tahap gabah kering dan belum dialihkan.']);
+            }
+            if ($source->type !== 'Beras' || $source->status !== 'Proses' || $source->current_stage !== 'Pemisahan' || ! $sameRawMaterial || $sourceAlreadyUsed) {
+                throw ValidationException::withMessages(['mergeSourceId' => 'Pilih batch gabah kering yang belum dipakai dan memiliki bahan baku yang sama.']);
+            }
+
+            $targetWeight = Decimal::normalize((string) ($target->dry_weight ?? '0'), 3, 'mergeSourceId');
+            $weight = Decimal::normalize((string) $source->dry_weight, 3, 'mergeSourceId');
+            if (bccomp($targetWeight, '0', 3) <= 0 || bccomp($weight, '0', 3) <= 0) {
+                throw ValidationException::withMessages(['mergeSourceId' => 'Batch tujuan dan sumber harus memiliki berat gabah kering.']);
+            }
+
+            $cost = $this->totalCost($source);
+            $target->raw_material_weight = bcadd((string) $target->raw_material_weight, (string) $source->raw_material_weight, 3);
+            $target->dry_weight = bcadd((string) $target->dry_weight, $weight, 3);
+            $target->raw_material_cogs = bcadd((string) $target->raw_material_cogs, $cost, 2);
+            $target->inherited_cost = bcadd((string) $target->inherited_cost, $cost, 2);
+            $target->save();
+
+            DB::table('production_batch_merges')->insert([
+                'target_batch_id' => $targetId,
+                'source_batch_id' => $sourceId,
+                'weight_kg' => $weight,
+                'transferred_cost' => $cost,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+
+            $lastStageDate = $target->stages()->max('end_date') ?: substr((string) $target->start_date, 0, 10);
+            $sourceStageDate = $source->stages()->max('end_date') ?: substr((string) $source->start_date, 0, 10);
+            $mergeDate = max(Decimal::today(), substr((string) $lastStageDate, 0, 10), substr((string) $sourceStageDate, 0, 10));
+            BatchStage::create([
+                'production_batch_id' => $targetId,
+                'stage_name' => 'Gabung Gabah Kering',
+                'start_date' => substr((string) $lastStageDate, 0, 10),
+                'end_date' => $mergeDate,
+                'weight_after' => $target->dry_weight,
+                'notes' => 'Digabung dengan batch '.$source->batch_number.' sebanyak '.$weight.' kg.',
+            ]);
+        }, 3);
+    }
+
     public function totalCost(ProductionBatch $batch): string
     {
         $costs = (string) DB::table('batch_costs')->where('production_batch_id', $batch->id)->where('is_initial_purchase', false)->sum('amount');
@@ -193,6 +261,9 @@ final class ProductionWorkflow
 
     public function addCost(ProductionBatch $batch, string $name, string $category, string $amount, string $date, ?string $paidDate, bool $isInitialPurchase = false): void
     {
+        if (DB::table('production_batch_merges')->where('source_batch_id', $batch->id)->exists()) {
+            throw ValidationException::withMessages(['cost_amount' => 'Batch ini sudah digabung dan tidak dapat menerima biaya baru.']);
+        }
         if ($batch->cost_finalized_at) {
             throw ValidationException::withMessages(['cost_amount' => 'Biaya batch sudah dikunci.']);
         }

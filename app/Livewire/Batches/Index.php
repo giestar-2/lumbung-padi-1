@@ -37,7 +37,8 @@ class Index extends Component
         DB::transaction(function () use ($id): void {
             $batch = ProductionBatch::lockForUpdate()->findOrFail($id);
             if ($batch->source_batch_id || $batch->children()->exists() || $batch->outputs()->exists() || $batch->stages()->exists() ||
-                DB::table('batch_costs')->where('production_batch_id', $id)->exists()) {
+                DB::table('batch_costs')->where('production_batch_id', $id)->exists() ||
+                DB::table('production_batch_merges')->where(fn ($query) => $query->where('target_batch_id', $id)->orWhere('source_batch_id', $id))->exists()) {
                 throw ValidationException::withMessages(['delete' => 'Batch memiliki tahap, biaya, hasil, atau alokasi bahan dan tidak dapat dihapus.']);
             }
             $batch->delete();
@@ -47,7 +48,10 @@ class Index extends Component
 
     public function render(): View
     {
-        $batches = ProductionBatch::where('type', in_array($this->type, ['Beras', 'Dedek', 'Pupuk']) ? $this->type : 'Beras')
+        $batches = ProductionBatch::query()->addSelect(['merged_into_batch_number' => DB::table('production_batch_merges as merges')
+            ->join('production_batches as target', 'target.id', '=', 'merges.target_batch_id')
+            ->select('target.batch_number')->whereColumn('merges.source_batch_id', 'production_batches.id')->limit(1)])
+            ->where('type', in_array($this->type, ['Beras', 'Dedek', 'Pupuk']) ? $this->type : 'Beras')
             ->where(fn ($q) => $q->where('batch_number', 'like', '%'.$this->search.'%')->orWhere('name', 'like', '%'.$this->search.'%'))
             ->when($this->from, fn ($q) => $q->whereDate('start_date', '>=', $this->from))->when($this->to, fn ($q) => $q->whereDate('start_date', '<=', $this->to))
             ->when($this->stage, fn ($q) => $q->where('current_stage', $this->stage))

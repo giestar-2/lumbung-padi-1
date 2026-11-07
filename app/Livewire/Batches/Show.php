@@ -54,6 +54,8 @@ class Show extends Component
 
     public $batch_notes = '';
 
+    public string $mergeSourceId = '';
+
     public array $mixtures = [];
 
     public array $allocation = ['Beras' => '0', 'Dedek' => '0', 'Pupuk' => '0'];
@@ -86,6 +88,16 @@ class Show extends Component
     public function addMixture(): void
     {
         $this->mixtures[] = ['name' => '', 'weight' => '', 'cost' => '0', 'paid' => false];
+    }
+
+    public function mergeDryBatch(ProductionWorkflow $workflow): void
+    {
+        $this->validate(['mergeSourceId' => 'required|exists:production_batches,id']);
+        $workflow->mergeDryBatch($this->batchId, (int) $this->mergeSourceId);
+        $this->reset('mergeSourceId');
+        $this->reload();
+        $this->stage_start_date = DB::table('batch_stages')->where('production_batch_id', $this->batchId)->max('end_date') ?: Decimal::today();
+        session()->flash('message', 'Gabah kering berhasil digabung. Berat dan modal batch sudah diperbarui.');
     }
 
     public function removeMixture(int $index): void
@@ -165,7 +177,37 @@ class Show extends Component
             ->where(fn ($q) => $q->where('name', 'like', '%'.$this->productSearch.'%')->orWhere('id', $this->output_product_id))->orderBy('name')->limit(30)->get();
         $selectedProduct = $outputProducts->firstWhere('id', $this->output_product_id);
         $totalCost = (new ProductionWorkflow)->totalCost($this->batch);
+        $mergedInto = DB::table('production_batch_merges as merges')
+            ->join('production_batches as target', 'target.id', '=', 'merges.target_batch_id')
+            ->where('merges.source_batch_id', $this->batchId)
+            ->select('target.id', 'target.batch_number', 'merges.weight_kg', 'merges.transferred_cost')
+            ->first();
+        $mergedSources = DB::table('production_batch_merges as merges')
+            ->join('production_batches as sources', 'sources.id', '=', 'merges.source_batch_id')
+            ->where('merges.target_batch_id', $this->batchId)
+            ->select('sources.batch_number', 'merges.weight_kg', 'merges.transferred_cost')
+            ->orderBy('merges.id')
+            ->get();
+        $canMergeDryBatches = $this->batch->type === 'Beras'
+            && $this->batch->status === 'Proses'
+            && $this->batch->current_stage === 'Pemisahan'
+            && ! $mergedInto;
+        $mergeCandidates = collect();
+        if ($canMergeDryBatches && $this->batch->raw_material_id) {
+            $mergeCandidates = ProductionBatch::query()
+                ->where('id', '<>', $this->batchId)
+                ->where('type', 'Beras')
+                ->where('status', 'Proses')
+                ->where('current_stage', 'Pemisahan')
+                ->where('raw_material_id', $this->batch->raw_material_id)
+                ->where('dry_weight', '>', 0)
+                ->whereNotExists(fn ($query) => $query->selectRaw('1')->from('production_batch_merges')->whereColumn('source_batch_id', 'production_batches.id'))
+                ->whereNotExists(fn ($query) => $query->selectRaw('1')->from('production_batch_merges')->whereColumn('target_batch_id', 'production_batches.id'))
+                ->orderBy('start_date')
+                ->orderBy('id')
+                ->get(['id', 'batch_number', 'name', 'dry_weight', 'origin']);
+        }
 
-        return view('livewire.batches.show', compact('outputProducts', 'selectedProduct', 'totalCost'));
+        return view('livewire.batches.show', compact('outputProducts', 'selectedProduct', 'totalCost', 'mergedInto', 'mergedSources', 'canMergeDryBatches', 'mergeCandidates'));
     }
 }
