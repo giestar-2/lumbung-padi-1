@@ -30,3 +30,20 @@ Thumbs.db
 /generate_tests.php
 /apply_modern_ui.php
 /refrensi.html
+
+# Design & Document Deliverables (Keep Local, Untracked in Git)
+*.fig
+*.figcraft
+*.drawio
+*.drawio.*
+*.docx
+*.xlsx
+*.pptx
+/SALIN_LANGSUNG_KE_FIGMA.html
+/lumbung_padi_*.pdf
+/scratch/
+/svg_exports/
+/figma_ready_vector_svg/
+/DESAIN_FIGMA_SIAP_PAKAI/
+rendered_*.png
+*.bin
