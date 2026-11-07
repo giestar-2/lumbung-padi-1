@@ -46,15 +46,15 @@ final class SalesExport
                 $summary->setName('Ringkasan');
                 $transactions = $writer->addNewSheetAndMakeItCurrent();
                 $transactions->setName('Transaksi');
-                $transactions->setSheetView(new SheetView(freezeRow: 2));
+                $transactions->setSheetView((new SheetView)->setFreezeRow(2));
                 $this->row($writer, ['Nomor', 'Tanggal penjualan', 'Pelanggan', 'Total setelah diskon', 'Sudah dibayar', 'Sisa piutang', 'Status', 'Jatuh tempo'], true);
                 $items = $writer->addNewSheetAndMakeItCurrent();
                 $items->setName('Item Produk');
-                $items->setSheetView(new SheetView(freezeRow: 2));
+                $items->setSheetView((new SheetView)->setFreezeRow(2));
                 $this->row($writer, ['Nomor', 'Produk', 'Kategori', 'Kg', 'Harga/kg', 'Subtotal', 'Diskon item', 'Nilai item yang cocok', 'HPP', 'Laba kotor'], true);
                 $payments = $writer->addNewSheetAndMakeItCurrent();
                 $payments->setName('Pembayaran');
-                $payments->setSheetView(new SheetView(freezeRow: 2));
+                $payments->setSheetView((new SheetView)->setFreezeRow(2));
                 $this->row($writer, ['Nomor', 'Tanggal pembayaran', 'Jenis', 'Nominal', 'Keterangan'], true);
                 $total = $paid = $balance = '0.00';
                 $count = 0;
@@ -123,8 +123,14 @@ final class SalesExport
     {
         $cells = [];
         foreach ($values as $value) {
-            $style = $heading ? new Style(fontBold: true, backgroundColor: 'EAF1E3') :
-                ($value instanceof DateTimeImmutable ? new Style(format: 'dd/mm/yyyy') : (is_float($value) ? new Style(format: '#,##0.00#') : null));
+            $style = null;
+            if ($heading) {
+                $style = (new Style)->setFontBold()->setBackgroundColor('EAF1E3');
+            } elseif ($value instanceof DateTimeImmutable) {
+                $style = (new Style)->setFormat('dd/mm/yyyy');
+            } elseif (is_float($value)) {
+                $style = (new Style)->setFormat('#,##0.00#');
+            }
             $cells[] = is_string($value) ? new StringCell($value, $style) : Cell::fromValue($value, $style);
         }
         $writer->addRow(new Row($cells));

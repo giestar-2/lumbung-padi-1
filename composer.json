@@ -6,11 +6,11 @@
     "keywords": ["laravel", "framework"],
     "license": "MIT",
     "require": {
-        "php": "^8.4",
-        "laravel/framework": "^13.17",
+        "php": "^8.3",
+        "laravel/framework": "^12.41.1",
         "laravel/tinker": "^3.0",
         "livewire/livewire": "^4.4",
-        "openspout/openspout": "~5.11.0",
+        "openspout/openspout": "^4.32",
         "ext-zip": "*"
     },
     "require-dev": {
@@ -83,6 +83,9 @@
         "allow-plugins": {
             "pestphp/pest-plugin": true,
             "php-http/discovery": true
+        },
+        "platform": {
+            "php": "8.3.6"
         }
     },
     "minimum-stability": "stable",
